@@ -161,12 +161,15 @@ func NewEngine(projectRoot, domainSuffix, profile string, monitoringNamespace ..
 	return e
 }
 
-// List returns all discovered scenarios in catalog order.
+// List returns all discovered scenarios in catalog order. Each result is
+// a copy of the cached scenario with Active filled in: the cached values
+// are never written, so concurrent callers cannot race on them.
 func (e *Engine) List() []*Scenario {
 	var result []*Scenario
 	for _, s := range e.scenarios {
-		s.Active = e.isActive(s.Name)
-		result = append(result, s)
+		out := *s
+		out.Active = e.isActive(s.Name)
+		result = append(result, &out)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return catalogLess(result[i].Category, result[i].DisplayName, result[i].Name,

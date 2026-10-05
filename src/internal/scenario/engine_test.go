@@ -174,6 +174,67 @@ func TestGet_ConcurrentReadsDoNotMutateCache(t *testing.T) {
 	}
 }
 
+// TestListAndGet_ConcurrentReadsDoNotMutateCache runs List and Get from
+// several goroutines at once: the scenarios list and detail handlers can
+// do exactly that. Both fill Active in on copies, so the cached scenario
+// is never written; under -race any write to it would be reported here.
+func TestListAndGet_ConcurrentReadsDoNotMutateCache(t *testing.T) {
+	root := t.TempDir()
+	createTestScenario(t, root, "test-scenario", testScenarioYAML)
+
+	engine := NewEngine(root, "k3d.local", "k3d")
+
+	// Mark the scenario active so List and Get have an Active value to fill in.
+	if err := os.MkdirAll(engine.stateDir(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(engine.stateDir(), "test-scenario.active"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 4
+	const calls = 50
+	errs := make(chan error, 2*workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for range calls {
+				list := engine.List()
+				if len(list) != 1 {
+					errs <- errors.New("List returned wrong number of scenarios")
+					return
+				}
+				if !list[0].Active {
+					errs <- errors.New("List returned Active = false, want true")
+					return
+				}
+			}
+		})
+		wg.Go(func() {
+			for range calls {
+				s, err := engine.Get("test-scenario")
+				if err != nil {
+					errs <- err
+					return
+				}
+				if !s.Active {
+					errs <- errors.New("Get returned Active = false, want true")
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	if engine.scenarios["test-scenario"].Active {
+		t.Error("List or Get mutated the cached scenario: Active = true, want false")
+	}
+}
+
 func TestResolveTemplate(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "scenarios"), 0755)
